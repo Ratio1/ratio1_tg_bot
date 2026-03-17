@@ -15,29 +15,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Setup Ratio1 and run bot update
+        uses: Ratio1/ratio1-setup-action@v1.0.0
         with:
-          python-version: "3.11"
-
-      - name: Install runtime dependency
-        run: |
-          python -m pip install --upgrade pip
-          pip install ratio1==3.5.13
-          r1ctl config reset
-          r1ctl config network --set mainnet
-
-      - name: Configure private key
-        env:
-          RATIO1_PRIVATE_KEY_PEM: ${{ secrets.RATIO1_PRIVATE_KEY_PEM }}
-        run: |
-          mkdir -p ~/.ratio1
-          printf '%s' "$RATIO1_PRIVATE_KEY_PEM" > ~/.ratio1/_naeural.pem
-          chmod 600 ~/.ratio1/_naeural.pem
-
-      - name: Run bot update
+          sdk_version: "3.5.13"
+          network: mainnet
+          private_key_pem: ${{ secrets.RATIO1_PRIVATE_KEY_PEM }}
+          command: python3 ratio1_tg_bot.py
         env:
           RATIO1_NODE: ${{ secrets.RATIO1_NODE }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python3 ratio1_tg_bot.py
