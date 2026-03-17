@@ -409,7 +409,7 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
   if message.startswith("/last_epoch_info"):    
     return hands_last_epoch_info()
 
-  return "Please use /watch <wallet_address> to start watching nodes. Available commands: /watchlist /watch /unwatch /unwatchall /nodes /network_status /ver"
+  return "Please use /watch <wallet_address> to start watching nodes."
 
 if __name__ == "__main__":   
   PIPELINE_NAME = "ratio1_telegram_bot"
