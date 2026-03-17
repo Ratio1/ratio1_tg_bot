@@ -13,6 +13,11 @@ showcasing the simplicity of the logic to handle Telegram communication.
 import os
 from ratio1 import Session, CustomPluginTemplate
 
+try:
+  from ver import VERSION as BOT_VERSION
+except Exception:
+  BOT_VERSION = "unknown"
+
 def loop_processing(plugin: CustomPluginTemplate):
   """
   This method will be continously called by the plugin to do any kind of required processing
@@ -367,6 +372,9 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
   
   def handle_start():
     return "Welcome to the Ratio1 Bot! Use /watch <wallet_address> to start watching your nodes. You will receive notifications when your nodes are offline."
+
+  def handle_ver():
+    return f"Bot version: {plugin.cfg_version}"
   
   def hands_last_epoch_info():
     need_last_epoch_info = "need_last_epoch_info"
@@ -396,10 +404,12 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
     return handle_network_status()
   if message.startswith("/start"):    
     return handle_start()
+  if message.startswith("/ver"):
+    return handle_ver()
   if message.startswith("/last_epoch_info"):    
     return hands_last_epoch_info()
 
-  return "Please use the /watch command followed by your Ethereum Wallet address to start watching the nodes on your wallet."
+  return "Please use /watch <wallet_address> to start watching nodes. Available commands: /watchlist /watch /unwatch /unwatchall /nodes /network_status /ver"
 
 if __name__ == "__main__":   
   PIPELINE_NAME = "ratio1_telegram_bot"
@@ -432,6 +442,7 @@ if __name__ == "__main__":
         admins=['401110073', '683223680'],
         offline_node_min_seens=2,
         process_delay=10,
+        version=BOT_VERSION,
       )
       pipeline.deploy()
     elif COMMAND == "STOP":

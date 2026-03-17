@@ -1,0 +1,41 @@
+name: CD Update Bot
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ver.py
+
+jobs:
+  update-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime dependency
+        run: |
+          python -m pip install --upgrade pip
+          pip install ratio1
+
+      - name: Configure private key
+        env:
+          RATIO1_PRIVATE_KEY_PEM: ${{ secrets.RATIO1_PRIVATE_KEY_PEM }}
+        run: |
+          mkdir -p ~/.ratio1
+          printf '%s' "$RATIO1_PRIVATE_KEY_PEM" > ~/.ratio1/_naeural.pem
+          chmod 600 ~/.ratio1/_naeural.pem
+
+      - name: Run bot update
+        env:
+          RATIO1_NODE: ${{ secrets.RATIO1_NODE }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 ratio1_tg_bot.py
