@@ -24,6 +24,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install ratio1
+          r1ctl config network --set mainnet
 
       - name: Configure private key
         env:
