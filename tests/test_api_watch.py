@@ -2,6 +2,7 @@ import importlib
 import sys
 import types
 import unittest
+from urllib.parse import urlparse, urlunparse
 
 
 ratio1 = types.ModuleType("ratio1")
@@ -96,6 +97,14 @@ class FakePlugin:
 
   def P(self, *args, **kwargs):
     pass
+
+  @property
+  def urlparse(self):
+    return urlparse
+
+  @property
+  def urlunparse(self):
+    return urlunparse
 
 
 class ApiWatchUrlTests(unittest.TestCase):

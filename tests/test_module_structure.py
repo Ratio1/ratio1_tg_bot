@@ -48,6 +48,46 @@ class ModuleStructureTests(unittest.TestCase):
 
       self.fail(f"Unexpected module-level node: {ast.dump(node, include_attributes=False)}")
 
+  def test_ratio1_handlers_do_not_import_dependencies_locally(self):
+    tree = ast.parse(BOT_FILE.read_text())
+    handler_names = {"loop_processing", "reply"}
+    handlers = [
+      node
+      for node in tree.body
+      if isinstance(node, ast.FunctionDef) and node.name in handler_names
+    ]
+
+    self.assertEqual({handler.name for handler in handlers}, handler_names)
+    for handler in handlers:
+      local_imports = [
+        node
+        for node in ast.walk(handler)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+      ]
+      self.assertEqual(
+        local_imports,
+        [],
+        f"{handler.name} should not use local imports because Ratio1 serializes handlers as remote code.",
+      )
+
+  def test_reply_uses_ratio1_plugin_url_helpers(self):
+    tree = ast.parse(BOT_FILE.read_text())
+    reply = next(
+      node
+      for node in tree.body
+      if isinstance(node, ast.FunctionDef) and node.name == "reply"
+    )
+    plugin_attrs = {
+      node.attr
+      for node in ast.walk(reply)
+      if isinstance(node, ast.Attribute)
+      and isinstance(node.value, ast.Name)
+      and node.value.id == "plugin"
+    }
+
+    self.assertIn("urlparse", plugin_attrs)
+    self.assertIn("urlunparse", plugin_attrs)
+
 
 if __name__ == "__main__":
   unittest.main()

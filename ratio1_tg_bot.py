@@ -343,11 +343,7 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
   This function is used to reply to a message. The given parameters are mandatory.
   It handles commands to watch and unwatch Ethereum wallets
   """
-  import re
-  from urllib.parse import urljoin, urlparse, urlunparse
-
   default_api_health_endpoint = "/health"
-  api_hostname_re = re.compile(r"^[A-Za-z0-9.-]+$")
 
   watched_wallets_cache_key = f"ratio1_watched_wallets"
   watched_apis_cache_key = f"ratio1_watched_apis"
@@ -395,16 +391,28 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
     if "://" not in api_url:
       api_url = f"https://{api_url}"
 
-    parsed = urlparse(api_url)
+    parsed = plugin.urlparse(api_url)
     if parsed.scheme not in ["http", "https"] or not parsed.netloc or parsed.hostname is None:
       return None
     if any(char.isspace() for char in parsed.netloc):
       return None
-    if not api_hostname_re.fullmatch(parsed.hostname):
+    if parsed.query or parsed.fragment or "@" in parsed.netloc:
       return None
 
+    try:
+      parsed.port
+    except ValueError:
+      return None
+
+    host = parsed.hostname
+    if host is None or host == "" or host.startswith(".") or host.endswith(".") or ".." in host:
+      return None
+    for host_char in host:
+      if not (host_char.isalnum() or host_char in [".", "-"]):
+        return None
+
     normalized_path = parsed.path.rstrip("/")
-    return urlunparse((parsed.scheme, parsed.netloc.lower(), normalized_path, "", "", ""))
+    return plugin.urlunparse((parsed.scheme, parsed.netloc.lower(), normalized_path, "", "", ""))
 
   def normalize_health_endpoint(endpoint: str):
     endpoint = endpoint.strip()
@@ -422,7 +430,7 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
     if api_base_url is None or health_endpoint is None:
       return None, None, None
 
-    health_url = urljoin(f"{api_base_url}/", health_endpoint.lstrip("/"))
+    health_url = f"{api_base_url.rstrip('/')}/{health_endpoint.lstrip('/')}"
     return api_base_url, health_endpoint, health_url
 
   def check_api_health(health_url: str):
