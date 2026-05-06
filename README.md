@@ -7,6 +7,7 @@ The bot deploys a Ratio1 `create_telegram_simple_bot` pipeline that:
 - posts an epoch summary to the configured Telegram chat when a new Ratio1 epoch is available;
 - lets users watch Ethereum wallets that own Ratio1 nodes;
 - sends Telegram alerts when watched nodes go offline, reminders while they stay offline, and recovery messages when they come back online.
+- lets users watch API health endpoints and sends alerts when watched APIs go offline or recover.
 
 ## Repository Layout
 
@@ -67,9 +68,10 @@ The bot ignores commands sent in the configured community chat and responds to d
 | --- | --- |
 | `/start` | Shows the initial usage message. |
 | `/watch <wallet_address>` | Watches an Ethereum wallet and alerts when its Ratio1 nodes are offline. |
+| `/watch_api <api_url>` | Starts watching an API. The bot asks you to confirm `/health` or provide another health endpoint path, validates it, then subscribes you to status-change alerts. |
 | `/unwatch <wallet_address>` | Stops watching one wallet. |
 | `/unwatchall` | Stops watching all wallets for the current chat. |
-| `/watchlist` | Lists watched wallets for the current chat. |
+| `/watchlist` | Lists watched wallets and APIs for the current chat. |
 | `/nodes` | Lists watched wallets and their nodes, including online/offline status. |
 | `/network_status` | Reports how many Ratio1 nodes are currently online. |
 | `/ver` | Shows the deployed bot version. |
@@ -84,7 +86,9 @@ During periodic processing, the bot:
 3. sends offline alerts after a node has been seen offline at least `offline_node_min_seens` times;
 4. sends reminders after 1, 6, 12, 24, and then recurring 24-hour intervals;
 5. sends recovery messages when previously offline nodes come back online;
-6. sends one epoch summary per epoch to `TELEGRAM_CHAT_ID`.
+6. checks watched API health endpoints every 5 minutes through one global watchlist shared by all users;
+7. sends API offline/recovery messages to every subscribed Telegram chat when the API state changes;
+8. sends one epoch summary per epoch to `TELEGRAM_CHAT_ID`.
 
 Epoch summary data comes from:
 
@@ -100,6 +104,7 @@ The bot persists state through the Ratio1 plugin disk API:
 - `ratio1_epoch_review_data.pkl` - epochs already summarized.
 - `ratio1_watched_wallets_data.pkl` - watched wallets by Telegram chat/user ID.
 - `ratio1_offline_node_alerts_data.pkl` - offline alert and reminder state.
+- `ratio1_watched_apis_data.pkl` - watched API health endpoints, current status, and subscriber chat IDs.
 
 These files are managed by the deployed plugin runtime and are not committed to this repository.
 

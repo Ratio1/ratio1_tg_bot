@@ -11,12 +11,70 @@ showcasing the simplicity of the logic to handle Telegram communication.
 
 """
 import os
+import re
+from urllib.parse import urljoin, urlparse, urlunparse
 from ratio1 import Session, CustomPluginTemplate
 
 try:
   from ver import VERSION as BOT_VERSION
 except Exception:
   BOT_VERSION = "unknown"
+
+API_WATCH_CHECK_LOOPS = 30
+DEFAULT_API_HEALTH_ENDPOINT = "/health"
+API_HOSTNAME_RE = re.compile(r"^[A-Za-z0-9.-]+$")
+
+
+def normalize_api_base_url(api_url: str):
+  api_url = api_url.strip()
+  if "://" not in api_url:
+    api_url = f"https://{api_url}"
+
+  parsed = urlparse(api_url)
+  if parsed.scheme not in ["http", "https"] or not parsed.netloc or parsed.hostname is None:
+    return None
+  if any(char.isspace() for char in parsed.netloc):
+    return None
+  if not API_HOSTNAME_RE.fullmatch(parsed.hostname):
+    return None
+
+  normalized_path = parsed.path.rstrip("/")
+  return urlunparse((parsed.scheme, parsed.netloc.lower(), normalized_path, "", "", ""))
+
+
+def normalize_health_endpoint(endpoint: str):
+  endpoint = endpoint.strip()
+  if endpoint.lower() in ["", "yes", "y", "ok", "confirm", "confirmed"]:
+    endpoint = DEFAULT_API_HEALTH_ENDPOINT
+  if endpoint.startswith("http://") or endpoint.startswith("https://"):
+    return None
+  if not endpoint.startswith("/"):
+    endpoint = f"/{endpoint}"
+  return endpoint
+
+
+def build_health_url(api_url: str, endpoint: str):
+  api_base_url = normalize_api_base_url(api_url)
+  health_endpoint = normalize_health_endpoint(endpoint)
+  if api_base_url is None or health_endpoint is None:
+    return None, None, None
+
+  health_url = urljoin(f"{api_base_url}/", health_endpoint.lstrip("/"))
+  return api_base_url, health_endpoint, health_url
+
+
+def check_api_health(plugin: CustomPluginTemplate, health_url: str):
+  try:
+    response = plugin.requests.get(health_url, timeout=10)
+    status_code = getattr(response, "status_code", None)
+    if status_code is None:
+      return False, "The API response did not include an HTTP status code."
+    if 200 <= status_code < 400:
+      return True, f"HTTP {status_code}"
+    return False, f"HTTP {status_code}"
+  except Exception as exc:
+    return False, str(exc)
+
 
 def loop_processing(plugin: CustomPluginTemplate):
   """
@@ -36,10 +94,13 @@ def loop_processing(plugin: CustomPluginTemplate):
   watched_wallets_cache_key = f"ratio1_watched_wallets"
   watched_wallets_loops_delay_cache_key = f"ratio1_watched_wallets_loops_delay"
   alert_cache_key = f"ratio1_node_alerts"
+  watched_apis_cache_key = f"ratio1_watched_apis"
+  watched_apis_loops_delay_cache_key = f"ratio1_watched_apis_loops_delay"
   cache_already_read_key = f"ratio1_epoch_review_already_read"
   diskapi_epoch_review_file_name = "ratio1_epoch_review_data.pkl"
   diskapi_watched_wallets_file_name = "ratio1_watched_wallets_data.pkl"
   diskapi_alerts_file_name = "ratio1_offline_node_alerts_data.pkl"
+  diskapi_watched_apis_file_name = "ratio1_watched_apis_data.pkl"
 
   need_last_epoch_info = "need_last_epoch_info"
 
@@ -85,8 +146,15 @@ def loop_processing(plugin: CustomPluginTemplate):
     plugin.obj_cache[epoch_review_cache_key] = plugin.diskapi_load_pickle_from_data(diskapi_epoch_review_file_name) or {}
     plugin.obj_cache[watched_wallets_cache_key] = plugin.diskapi_load_pickle_from_data(diskapi_watched_wallets_file_name) or {}
     plugin.obj_cache[alert_cache_key] = plugin.diskapi_load_pickle_from_data(diskapi_alerts_file_name) or {}
+    plugin.obj_cache[watched_apis_cache_key] = plugin.diskapi_load_pickle_from_data(diskapi_watched_apis_file_name) or {}
     plugin.obj_cache[watched_wallets_loops_delay_cache_key] = 10
+    plugin.obj_cache[watched_apis_loops_delay_cache_key] = API_WATCH_CHECK_LOOPS
     plugin.obj_cache[cache_already_read_key] = True # We use this flag to read the cache only once at the first run
+
+  if plugin.obj_cache.get(watched_apis_cache_key) is None:
+    plugin.obj_cache[watched_apis_cache_key] = plugin.diskapi_load_pickle_from_data(diskapi_watched_apis_file_name) or {}
+  if plugin.obj_cache.get(watched_apis_loops_delay_cache_key) is None:
+    plugin.obj_cache[watched_apis_loops_delay_cache_key] = API_WATCH_CHECK_LOOPS
     
 
   # Check users' watched wallets and notify if any node is offline
@@ -216,6 +284,44 @@ def loop_processing(plugin: CustomPluginTemplate):
   else:
     plugin.obj_cache[watched_wallets_loops_delay_cache_key] += 1
 
+  # Check watched APIs globally and notify all subscribers only when state changes.
+  if plugin.obj_cache.get(watched_apis_loops_delay_cache_key) == API_WATCH_CHECK_LOOPS:
+    watched_apis = plugin.obj_cache.get(watched_apis_cache_key) or {}
+    api_watch_changes = False
+    for health_url, api_watch in watched_apis.items():
+      subscribers = api_watch.get("subscribers", [])
+      if len(subscribers) == 0:
+        continue
+
+      api_is_online, health_details = check_api_health(plugin, health_url)
+      previous_is_online = api_watch.get("is_online")
+      api_watch["last_checked_ts"] = plugin.time()
+      api_watch["last_check_details"] = health_details
+
+      if previous_is_online is None:
+        api_watch["is_online"] = api_is_online
+        api_watch_changes = True
+        continue
+
+      if previous_is_online != api_is_online:
+        api_watch["is_online"] = api_is_online
+        api_watch_changes = True
+        state_text = "back online" if api_is_online else "offline"
+        marker = "✅" if api_is_online else "⚠️"
+        message = f"{marker} API {api_watch.get('api_url', health_url)} is {state_text}.\nHealth endpoint: {health_url}"
+        if not api_is_online:
+          message += f"\nLast check: {health_details}"
+        for subscriber in subscribers:
+          plugin.send_message_to_user(user_id=subscriber, text=message)
+
+      watched_apis[health_url] = api_watch
+
+    if api_watch_changes:
+      plugin.diskapi_save_pickle_to_data(watched_apis, diskapi_watched_apis_file_name)
+    plugin.obj_cache[watched_apis_loops_delay_cache_key] = 0
+  else:
+    plugin.obj_cache[watched_apis_loops_delay_cache_key] += 1
+
 
   need_info = plugin.obj_cache.get(need_last_epoch_info, False)
 
@@ -287,7 +393,17 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
   It handles commands to watch and unwatch Ethereum wallets
   """
   watched_wallets_cache_key = f"ratio1_watched_wallets"
+  watched_apis_cache_key = f"ratio1_watched_apis"
+  pending_api_watch_cache_key = f"ratio1_pending_api_watch"
   diskapi_watched_wallets_file_name = "ratio1_watched_wallets_data.pkl"
+  diskapi_watched_apis_file_name = "ratio1_watched_apis_data.pkl"
+
+  if plugin.obj_cache.get(watched_wallets_cache_key) is None:
+    plugin.obj_cache[watched_wallets_cache_key] = plugin.diskapi_load_pickle_from_data(diskapi_watched_wallets_file_name) or {}
+  if plugin.obj_cache.get(watched_apis_cache_key) is None:
+    plugin.obj_cache[watched_apis_cache_key] = plugin.diskapi_load_pickle_from_data(diskapi_watched_apis_file_name) or {}
+  if plugin.obj_cache.get(pending_api_watch_cache_key) is None:
+    plugin.obj_cache[pending_api_watch_cache_key] = {}
   
   def handle_watch():
     user_watched_wallets = plugin.obj_cache.get(watched_wallets_cache_key).get(chat_id, [])
@@ -338,11 +454,23 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
   
   def handle_watchlist():
     user_watched_wallets = plugin.obj_cache.get(watched_wallets_cache_key).get(chat_id, [])
-    if not user_watched_wallets:
-      return "You are not watching any wallet. Use /watch <wallet_address> to start watching a wallet."
+    user_watched_apis = get_user_watched_apis()
+    if not user_watched_wallets and not user_watched_apis:
+      return "You are not watching any wallet or API. Use /watch <wallet_address> or /watch_api <api_url> to start watching."
     message = "You are currently watching the following wallets:\n"
-    for wallet in user_watched_wallets:
-      message += f"- {wallet}\n"
+    if user_watched_wallets:
+      for wallet in user_watched_wallets:
+        message += f"- {wallet}\n"
+    else:
+      message += "- No watched wallets\n"
+    message += "\nYou are currently watching the following APIs:\n"
+    if user_watched_apis:
+      for api_watch in user_watched_apis:
+        state = api_watch.get("is_online")
+        state_marker = "🟢" if state is True else "🔴" if state is False else "⚪"
+        message += f"- {state_marker} {api_watch.get('api_url')} ({api_watch.get('health_url')})\n"
+    else:
+      message += "- No watched APIs\n"
     return message
   
   def handle_network_status():
@@ -371,7 +499,7 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
     return message
   
   def handle_start():
-    return "Welcome to the Ratio1 Bot! Use /watch <wallet_address> to start watching your nodes. You will receive notifications when your nodes are offline."
+    return "Welcome to the Ratio1 Bot! Use /watch <wallet_address> to watch your nodes or /watch_api <api_url> to watch an API. You will receive notifications when watched services change status."
 
   def handle_ver():
     return f"Bot version: {plugin.cfg_version}"
@@ -385,11 +513,72 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
       msg = f"Sorry {user}, you are not authorized to force last epoch info display."
     return msg
 
+  def get_user_watched_apis():
+    watched_apis = plugin.obj_cache.get(watched_apis_cache_key) or {}
+    return [
+      api_watch
+      for api_watch in watched_apis.values()
+      if chat_id in api_watch.get("subscribers", [])
+    ]
+
+  def handle_watch_api():
+    message_parts = message.split(maxsplit=1)
+    if len(message_parts) != 2:
+      return "Please provide the API URL after the /watch_api command. Example: /watch_api https://api.example.com"
+
+    api_url = normalize_api_base_url(message_parts[1])
+    if api_url is None:
+      return f"Invalid API URL: {message_parts[1]}. Please provide a valid http or https URL."
+
+    plugin.obj_cache[pending_api_watch_cache_key][chat_id] = {
+      "api_url": api_url,
+      "created_ts": plugin.time(),
+    }
+    return f"Default health endpoint is {DEFAULT_API_HEALTH_ENDPOINT}. Reply with yes to use it, or send the health endpoint path to use instead."
+
+  def handle_pending_api_endpoint():
+    pending_api_watch = plugin.obj_cache.get(pending_api_watch_cache_key, {}).get(chat_id)
+    if pending_api_watch is None:
+      return None
+
+    api_url = pending_api_watch["api_url"]
+    api_base_url, health_endpoint, health_url = build_health_url(api_url, message)
+    if health_url is None:
+      return "Invalid health endpoint. Reply with a path like /health or /api/health."
+
+    api_is_online, health_details = check_api_health(plugin, health_url)
+    if not api_is_online:
+      return f"Could not add API watch. Health check failed for {health_url}: {health_details}"
+
+    watched_apis = plugin.obj_cache.get(watched_apis_cache_key) or {}
+    api_watch = watched_apis.get(health_url, {
+      "api_url": api_base_url,
+      "health_endpoint": health_endpoint,
+      "health_url": health_url,
+      "subscribers": [],
+      "is_online": True,
+      "last_checked_ts": plugin.time(),
+      "last_check_details": health_details,
+    })
+    if chat_id not in api_watch["subscribers"]:
+      api_watch["subscribers"].append(chat_id)
+    api_watch["is_online"] = True
+    api_watch["last_checked_ts"] = plugin.time()
+    api_watch["last_check_details"] = health_details
+    watched_apis[health_url] = api_watch
+
+    plugin.obj_cache[watched_apis_cache_key] = watched_apis
+    plugin.obj_cache[pending_api_watch_cache_key].pop(chat_id, None)
+    plugin.diskapi_save_pickle_to_data(watched_apis, diskapi_watched_apis_file_name)
+    return f"You are now watching API {api_base_url} using health endpoint {health_endpoint}."
+
   # We do not want to reply to messages in the Ratio1 Community Group
   if str(chat_id) == str(plugin.cfg_chat_id):
     return
-  
+
   # Handle the supported commands
+  if message.startswith("/watch_api"):
+    return handle_watch_api()
   if message.startswith("/watchlist"):
     return handle_watchlist()
   if message.startswith("/watch"):
@@ -409,7 +598,11 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
   if message.startswith("/last_epoch_info"):    
     return hands_last_epoch_info()
 
-  return "Please use /watch <wallet_address> to start watching nodes."
+  pending_api_response = handle_pending_api_endpoint()
+  if pending_api_response is not None:
+    return pending_api_response
+
+  return "Please use /watch <wallet_address> to start watching nodes or /watch_api <api_url> to start watching an API."
 
 if __name__ == "__main__":   
   PIPELINE_NAME = "ratio1_telegram_bot"
