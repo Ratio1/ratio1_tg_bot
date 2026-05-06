@@ -210,6 +210,38 @@ class WatchApiCommandTests(unittest.TestCase):
     self.assertIn("https://api.example.com/health", response)
     self.assertIn("🟢", response)
 
+  def test_watchlist_finds_wallets_saved_under_integer_chat_id(self):
+    plugin = FakePlugin()
+    plugin.obj_cache["ratio1_watched_wallets"] = {1: ["0x1111111111111111111111111111111111111111"]}
+
+    response = bot.reply(plugin, "/watchlist", "u1", "1")
+
+    self.assertIn("0x1111111111111111111111111111111111111111", response)
+
+  def test_watch_api_does_not_duplicate_integer_subscriber_id(self):
+    plugin = FakePlugin()
+    plugin.obj_cache["ratio1_watched_apis"] = {
+      "https://api.example.com/health": {
+        "api_url": "https://api.example.com",
+        "health_endpoint": "/health",
+        "health_url": "https://api.example.com/health",
+        "subscribers": [1],
+        "is_online": True,
+      }
+    }
+
+    bot.reply(plugin, "/watch_api https://api.example.com", "u1", "1")
+    response = bot.reply(plugin, "yes", "u1", "1")
+
+    self.assertEqual(
+      response,
+      "You are now watching API https://api.example.com using health endpoint /health.",
+    )
+    self.assertEqual(
+      plugin.obj_cache["ratio1_watched_apis"]["https://api.example.com/health"]["subscribers"],
+      [1],
+    )
+
 
 class ApiMonitoringLoopTests(unittest.TestCase):
   def test_loop_notifies_all_subscribers_when_api_goes_offline(self):

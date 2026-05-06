@@ -404,9 +404,38 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
     plugin.obj_cache[watched_apis_cache_key] = plugin.diskapi_load_pickle_from_data(diskapi_watched_apis_file_name) or {}
   if plugin.obj_cache.get(pending_api_watch_cache_key) is None:
     plugin.obj_cache[pending_api_watch_cache_key] = {}
+
+  def get_chat_id_variants():
+    variants = [chat_id, str(chat_id)]
+    try:
+      variants.append(int(chat_id))
+    except Exception:
+      pass
+
+    unique_variants = []
+    for variant in variants:
+      if variant not in unique_variants:
+        unique_variants.append(variant)
+    return unique_variants
+
+  def get_existing_chat_cache_key(cache):
+    for chat_id_variant in get_chat_id_variants():
+      if chat_id_variant in cache:
+        return chat_id_variant
+    return str(chat_id)
+
+  def get_chat_cache_values(cache):
+    return cache.get(get_existing_chat_cache_key(cache), [])
+
+  def set_chat_cache_values(cache, values):
+    cache[get_existing_chat_cache_key(cache)] = values
+
+  def chat_id_is_subscribed(subscribers):
+    return any(chat_id_variant in subscribers for chat_id_variant in get_chat_id_variants())
   
   def handle_watch():
-    user_watched_wallets = plugin.obj_cache.get(watched_wallets_cache_key).get(chat_id, [])
+    watched_wallets = plugin.obj_cache.get(watched_wallets_cache_key)
+    user_watched_wallets = get_chat_cache_values(watched_wallets)
     message_parts = message.split(" ")
     if len(message_parts) != 2:
       response = "Please provide your Ethereum Wallet address after the /watch command. Example: /watch 0xYourWalletAddress\n"
@@ -425,7 +454,7 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
       return f"You are already watching the wallet {wallet_address}."
     
     user_watched_wallets.append(wallet_address)
-    plugin.obj_cache[watched_wallets_cache_key][chat_id] = user_watched_wallets
+    set_chat_cache_values(watched_wallets, user_watched_wallets)
     plugin.diskapi_save_pickle_to_data(plugin.obj_cache.get(watched_wallets_cache_key), diskapi_watched_wallets_file_name)
     return f"You are now watching the wallet {wallet_address}. You will receive notifications when your nodes are offline."
 
@@ -435,25 +464,27 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
       return "Please provide your Ethereum Wallet address after the /unwatch command. Example: /unwatch 0xYourWalletAddress"
     wallet_address = message_parts[1]
     wallet_address = plugin.bc.eth_addr_to_checksum_address(wallet_address)
-    user_watched_wallets = plugin.obj_cache.get(watched_wallets_cache_key).get(chat_id, [])
+    watched_wallets = plugin.obj_cache.get(watched_wallets_cache_key)
+    user_watched_wallets = get_chat_cache_values(watched_wallets)
 
     if wallet_address not in user_watched_wallets:
       return f"You are not watching the wallet {wallet_address}."
     user_watched_wallets.remove(wallet_address)
-    plugin.obj_cache[watched_wallets_cache_key][chat_id] = user_watched_wallets
+    set_chat_cache_values(watched_wallets, user_watched_wallets)
     plugin.diskapi_save_pickle_to_data(plugin.obj_cache.get(watched_wallets_cache_key), diskapi_watched_wallets_file_name)
     return f"You are no longer watching the wallet {wallet_address}. You will not receive notifications for this wallet anymore."
   
   def handle_unwatchall():
-    user_watched_wallets = plugin.obj_cache.get(watched_wallets_cache_key).get(chat_id, [])
+    watched_wallets = plugin.obj_cache.get(watched_wallets_cache_key)
+    user_watched_wallets = get_chat_cache_values(watched_wallets)
     if not user_watched_wallets:
       return "You are not watching any wallet."
-    plugin.obj_cache[watched_wallets_cache_key][chat_id] = []
+    set_chat_cache_values(watched_wallets, [])
     plugin.diskapi_save_pickle_to_data(plugin.obj_cache.get(watched_wallets_cache_key), diskapi_watched_wallets_file_name)
     return "You have stopped watching all wallets."
   
   def handle_watchlist():
-    user_watched_wallets = plugin.obj_cache.get(watched_wallets_cache_key).get(chat_id, [])
+    user_watched_wallets = get_chat_cache_values(plugin.obj_cache.get(watched_wallets_cache_key))
     user_watched_apis = get_user_watched_apis()
     if not user_watched_wallets and not user_watched_apis:
       return "You are not watching any wallet or API. Use /watch <wallet_address> or /watch_api <api_url> to start watching."
@@ -481,7 +512,7 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
     return message
   
   def handle_nodes():
-    user_watched_wallets = plugin.obj_cache.get(watched_wallets_cache_key).get(chat_id, [])
+    user_watched_wallets = get_chat_cache_values(plugin.obj_cache.get(watched_wallets_cache_key))
     if not user_watched_wallets:
       return "You are not watching any wallet. Use /watch <wallet_address> to start watching a wallet."
     message = "You are currently watching the following wallets and their nodes:\n"
@@ -518,7 +549,7 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
     return [
       api_watch
       for api_watch in watched_apis.values()
-      if chat_id in api_watch.get("subscribers", [])
+      if chat_id_is_subscribed(api_watch.get("subscribers", []))
     ]
 
   def handle_watch_api():
@@ -560,8 +591,8 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
       "last_checked_ts": plugin.time(),
       "last_check_details": health_details,
     })
-    if chat_id not in api_watch["subscribers"]:
-      api_watch["subscribers"].append(chat_id)
+    if not chat_id_is_subscribed(api_watch["subscribers"]):
+      api_watch["subscribers"].append(str(chat_id))
     api_watch["is_online"] = True
     api_watch["last_checked_ts"] = plugin.time()
     api_watch["last_check_details"] = health_details
