@@ -11,69 +11,7 @@ showcasing the simplicity of the logic to handle Telegram communication.
 
 """
 import os
-import re
-from urllib.parse import urljoin, urlparse, urlunparse
 from ratio1 import Session, CustomPluginTemplate
-
-try:
-  from ver import VERSION as BOT_VERSION
-except Exception:
-  BOT_VERSION = "unknown"
-
-API_WATCH_CHECK_LOOPS = 30
-DEFAULT_API_HEALTH_ENDPOINT = "/health"
-API_HOSTNAME_RE = re.compile(r"^[A-Za-z0-9.-]+$")
-
-
-def normalize_api_base_url(api_url: str):
-  api_url = api_url.strip()
-  if "://" not in api_url:
-    api_url = f"https://{api_url}"
-
-  parsed = urlparse(api_url)
-  if parsed.scheme not in ["http", "https"] or not parsed.netloc or parsed.hostname is None:
-    return None
-  if any(char.isspace() for char in parsed.netloc):
-    return None
-  if not API_HOSTNAME_RE.fullmatch(parsed.hostname):
-    return None
-
-  normalized_path = parsed.path.rstrip("/")
-  return urlunparse((parsed.scheme, parsed.netloc.lower(), normalized_path, "", "", ""))
-
-
-def normalize_health_endpoint(endpoint: str):
-  endpoint = endpoint.strip()
-  if endpoint.lower() in ["", "yes", "y", "ok", "confirm", "confirmed"]:
-    endpoint = DEFAULT_API_HEALTH_ENDPOINT
-  if endpoint.startswith("http://") or endpoint.startswith("https://"):
-    return None
-  if not endpoint.startswith("/"):
-    endpoint = f"/{endpoint}"
-  return endpoint
-
-
-def build_health_url(api_url: str, endpoint: str):
-  api_base_url = normalize_api_base_url(api_url)
-  health_endpoint = normalize_health_endpoint(endpoint)
-  if api_base_url is None or health_endpoint is None:
-    return None, None, None
-
-  health_url = urljoin(f"{api_base_url}/", health_endpoint.lstrip("/"))
-  return api_base_url, health_endpoint, health_url
-
-
-def check_api_health(plugin: CustomPluginTemplate, health_url: str):
-  try:
-    response = plugin.requests.get(health_url, timeout=10)
-    status_code = getattr(response, "status_code", None)
-    if status_code is None:
-      return False, "The API response did not include an HTTP status code."
-    if 200 <= status_code < 400:
-      return True, f"HTTP {status_code}"
-    return False, f"HTTP {status_code}"
-  except Exception as exc:
-    return False, str(exc)
 
 
 def loop_processing(plugin: CustomPluginTemplate):
@@ -85,6 +23,7 @@ def loop_processing(plugin: CustomPluginTemplate):
   In this example, we will check for the last epoch change and send a summary of the last epoch,
   as well as checking for watched wallets and notifying users if their nodes are offline.
   """
+  api_watch_check_loops = 30
 
   epoch_manager = plugin.netmon.epoch_manager
   last_epoch = epoch_manager.get_last_sync_epoch()
@@ -103,6 +42,18 @@ def loop_processing(plugin: CustomPluginTemplate):
   diskapi_watched_apis_file_name = "ratio1_watched_apis_data.pkl"
 
   need_last_epoch_info = "need_last_epoch_info"
+
+  def check_api_health(health_url: str):
+    try:
+      response = plugin.requests.get(health_url, timeout=10)
+      status_code = getattr(response, "status_code", None)
+      if status_code is None:
+        return False, "The API response did not include an HTTP status code."
+      if 200 <= status_code < 400:
+        return True, f"HTTP {status_code}"
+      return False, f"HTTP {status_code}"
+    except Exception as exc:
+      return False, str(exc)
 
   def get_erc721_total_supply(contract_address: str) -> int:
     return int(plugin.requests.post("https://base.drpc.org", json={
@@ -148,13 +99,13 @@ def loop_processing(plugin: CustomPluginTemplate):
     plugin.obj_cache[alert_cache_key] = plugin.diskapi_load_pickle_from_data(diskapi_alerts_file_name) or {}
     plugin.obj_cache[watched_apis_cache_key] = plugin.diskapi_load_pickle_from_data(diskapi_watched_apis_file_name) or {}
     plugin.obj_cache[watched_wallets_loops_delay_cache_key] = 10
-    plugin.obj_cache[watched_apis_loops_delay_cache_key] = API_WATCH_CHECK_LOOPS
+    plugin.obj_cache[watched_apis_loops_delay_cache_key] = api_watch_check_loops
     plugin.obj_cache[cache_already_read_key] = True # We use this flag to read the cache only once at the first run
 
   if plugin.obj_cache.get(watched_apis_cache_key) is None:
     plugin.obj_cache[watched_apis_cache_key] = plugin.diskapi_load_pickle_from_data(diskapi_watched_apis_file_name) or {}
   if plugin.obj_cache.get(watched_apis_loops_delay_cache_key) is None:
-    plugin.obj_cache[watched_apis_loops_delay_cache_key] = API_WATCH_CHECK_LOOPS
+    plugin.obj_cache[watched_apis_loops_delay_cache_key] = api_watch_check_loops
     
 
   # Check users' watched wallets and notify if any node is offline
@@ -285,7 +236,7 @@ def loop_processing(plugin: CustomPluginTemplate):
     plugin.obj_cache[watched_wallets_loops_delay_cache_key] += 1
 
   # Check watched APIs globally and notify all subscribers only when state changes.
-  if plugin.obj_cache.get(watched_apis_loops_delay_cache_key) == API_WATCH_CHECK_LOOPS:
+  if plugin.obj_cache.get(watched_apis_loops_delay_cache_key) == api_watch_check_loops:
     watched_apis = plugin.obj_cache.get(watched_apis_cache_key) or {}
     api_watch_changes = False
     for health_url, api_watch in watched_apis.items():
@@ -293,7 +244,7 @@ def loop_processing(plugin: CustomPluginTemplate):
       if len(subscribers) == 0:
         continue
 
-      api_is_online, health_details = check_api_health(plugin, health_url)
+      api_is_online, health_details = check_api_health(health_url)
       previous_is_online = api_watch.get("is_online")
       api_watch["last_checked_ts"] = plugin.time()
       api_watch["last_check_details"] = health_details
@@ -392,6 +343,12 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
   This function is used to reply to a message. The given parameters are mandatory.
   It handles commands to watch and unwatch Ethereum wallets
   """
+  import re
+  from urllib.parse import urljoin, urlparse, urlunparse
+
+  default_api_health_endpoint = "/health"
+  api_hostname_re = re.compile(r"^[A-Za-z0-9.-]+$")
+
   watched_wallets_cache_key = f"ratio1_watched_wallets"
   watched_apis_cache_key = f"ratio1_watched_apis"
   pending_api_watch_cache_key = f"ratio1_pending_api_watch"
@@ -432,6 +389,53 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
 
   def chat_id_is_subscribed(subscribers):
     return any(chat_id_variant in subscribers for chat_id_variant in get_chat_id_variants())
+
+  def normalize_api_base_url(api_url: str):
+    api_url = api_url.strip()
+    if "://" not in api_url:
+      api_url = f"https://{api_url}"
+
+    parsed = urlparse(api_url)
+    if parsed.scheme not in ["http", "https"] or not parsed.netloc or parsed.hostname is None:
+      return None
+    if any(char.isspace() for char in parsed.netloc):
+      return None
+    if not api_hostname_re.fullmatch(parsed.hostname):
+      return None
+
+    normalized_path = parsed.path.rstrip("/")
+    return urlunparse((parsed.scheme, parsed.netloc.lower(), normalized_path, "", "", ""))
+
+  def normalize_health_endpoint(endpoint: str):
+    endpoint = endpoint.strip()
+    if endpoint.lower() in ["", "yes", "y", "ok", "confirm", "confirmed"]:
+      endpoint = default_api_health_endpoint
+    if endpoint.startswith("http://") or endpoint.startswith("https://"):
+      return None
+    if not endpoint.startswith("/"):
+      endpoint = f"/{endpoint}"
+    return endpoint
+
+  def build_health_url(api_url: str, endpoint: str):
+    api_base_url = normalize_api_base_url(api_url)
+    health_endpoint = normalize_health_endpoint(endpoint)
+    if api_base_url is None or health_endpoint is None:
+      return None, None, None
+
+    health_url = urljoin(f"{api_base_url}/", health_endpoint.lstrip("/"))
+    return api_base_url, health_endpoint, health_url
+
+  def check_api_health(health_url: str):
+    try:
+      response = plugin.requests.get(health_url, timeout=10)
+      status_code = getattr(response, "status_code", None)
+      if status_code is None:
+        return False, "The API response did not include an HTTP status code."
+      if 200 <= status_code < 400:
+        return True, f"HTTP {status_code}"
+      return False, f"HTTP {status_code}"
+    except Exception as exc:
+      return False, str(exc)
   
   def handle_watch():
     watched_wallets = plugin.obj_cache.get(watched_wallets_cache_key)
@@ -565,7 +569,7 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
       "api_url": api_url,
       "created_ts": plugin.time(),
     }
-    return f"Default health endpoint is {DEFAULT_API_HEALTH_ENDPOINT}. Reply with yes to use it, or send the health endpoint path to use instead."
+    return f"Default health endpoint is {default_api_health_endpoint}. Reply with yes to use it, or send the health endpoint path to use instead."
 
   def handle_pending_api_endpoint():
     pending_api_watch = plugin.obj_cache.get(pending_api_watch_cache_key, {}).get(chat_id)
@@ -577,7 +581,7 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
     if health_url is None:
       return "Invalid health endpoint. Reply with a path like /health or /api/health."
 
-    api_is_online, health_details = check_api_health(plugin, health_url)
+    api_is_online, health_details = check_api_health(health_url)
     if not api_is_online:
       return f"Could not add API watch. Health check failed for {health_url}: {health_details}"
 
@@ -637,6 +641,10 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
 
 if __name__ == "__main__":   
   PIPELINE_NAME = "ratio1_telegram_bot"
+  try:
+    from ver import VERSION as BOT_VERSION
+  except Exception:
+    BOT_VERSION = "unknown"
 
   session = Session() 
 

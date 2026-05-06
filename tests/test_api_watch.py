@@ -10,6 +10,7 @@ ratio1.CustomPluginTemplate = object
 sys.modules["ratio1"] = ratio1
 
 bot = importlib.import_module("ratio1_tg_bot")
+API_WATCH_CHECK_LOOPS = 30
 
 
 class FakeResponse:
@@ -99,25 +100,48 @@ class FakePlugin:
 
 class ApiWatchUrlTests(unittest.TestCase):
   def test_normalizes_api_url_and_default_health_endpoint(self):
+    plugin = FakePlugin()
+
+    bot.reply(plugin, "/watch_api api.example.com/", "u1", "1")
+    response = bot.reply(plugin, "yes", "u1", "1")
+
     self.assertEqual(
-      bot.build_health_url("api.example.com/", "yes"),
-      ("https://api.example.com", "/health", "https://api.example.com/health"),
+      response,
+      "You are now watching API https://api.example.com using health endpoint /health.",
     )
+    self.assertEqual(plugin.requests.calls, [("https://api.example.com/health", 10)])
+
+  def test_normalizes_custom_api_base_path_and_health_endpoint(self):
+    plugin = FakePlugin()
+
+    bot.reply(plugin, "/watch_api https://api.example.com/v1", "u1", "1")
+    response = bot.reply(plugin, "status", "u1", "1")
+
     self.assertEqual(
-      bot.build_health_url("https://api.example.com/v1", "status"),
-      ("https://api.example.com/v1", "/status", "https://api.example.com/v1/status"),
+      response,
+      "You are now watching API https://api.example.com/v1 using health endpoint /status.",
     )
+    self.assertEqual(plugin.requests.calls, [("https://api.example.com/v1/status", 10)])
 
   def test_rejects_invalid_api_urls(self):
     for api_url in ["", "not a url", "ftp://example.com", "http://", "https://exa mple.com"]:
       with self.subTest(api_url=api_url):
-        self.assertIsNone(bot.normalize_api_base_url(api_url))
+        plugin = FakePlugin()
+        response = bot.reply(plugin, f"/watch_api {api_url}", "u1", "1")
+        self.assertTrue(
+          "Invalid API URL" in response or "Please provide the API URL" in response,
+          response,
+        )
+        self.assertEqual(plugin.requests.calls, [])
 
   def test_rejects_absolute_health_endpoint_url(self):
-    self.assertEqual(
-      bot.build_health_url("https://api.example.com", "https://evil.example.com/health"),
-      (None, None, None),
-    )
+    plugin = FakePlugin()
+
+    bot.reply(plugin, "/watch_api https://api.example.com", "u1", "1")
+    response = bot.reply(plugin, "https://evil.example.com/health", "u1", "1")
+
+    self.assertEqual(response, "Invalid health endpoint. Reply with a path like /health or /api/health.")
+    self.assertEqual(plugin.requests.calls, [])
 
 
 class WatchApiCommandTests(unittest.TestCase):
@@ -251,7 +275,7 @@ class ApiMonitoringLoopTests(unittest.TestCase):
     plugin.obj_cache["ratio1_watched_wallets"] = {}
     plugin.obj_cache["ratio1_node_alerts"] = {}
     plugin.obj_cache["ratio1_watched_wallets_loops_delay"] = 0
-    plugin.obj_cache["ratio1_watched_apis_loops_delay"] = bot.API_WATCH_CHECK_LOOPS
+    plugin.obj_cache["ratio1_watched_apis_loops_delay"] = API_WATCH_CHECK_LOOPS
     plugin.obj_cache["ratio1_watched_apis"] = {
       "https://api.example.com/health": {
         "api_url": "https://api.example.com",
@@ -278,7 +302,7 @@ class ApiMonitoringLoopTests(unittest.TestCase):
     plugin.obj_cache["ratio1_watched_wallets"] = {}
     plugin.obj_cache["ratio1_node_alerts"] = {}
     plugin.obj_cache["ratio1_watched_wallets_loops_delay"] = 0
-    plugin.obj_cache["ratio1_watched_apis_loops_delay"] = bot.API_WATCH_CHECK_LOOPS
+    plugin.obj_cache["ratio1_watched_apis_loops_delay"] = API_WATCH_CHECK_LOOPS
     plugin.obj_cache["ratio1_watched_apis"] = {
       "https://api.example.com/health": {
         "api_url": "https://api.example.com",
@@ -304,7 +328,7 @@ class ApiMonitoringLoopTests(unittest.TestCase):
     plugin.obj_cache["ratio1_watched_wallets"] = {}
     plugin.obj_cache["ratio1_node_alerts"] = {}
     plugin.obj_cache["ratio1_watched_wallets_loops_delay"] = 0
-    plugin.obj_cache["ratio1_watched_apis_loops_delay"] = bot.API_WATCH_CHECK_LOOPS
+    plugin.obj_cache["ratio1_watched_apis_loops_delay"] = API_WATCH_CHECK_LOOPS
     plugin.obj_cache["ratio1_watched_apis"] = {
       "https://api.example.com/health": {
         "api_url": "https://api.example.com",
