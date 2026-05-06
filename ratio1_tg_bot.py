@@ -677,6 +677,7 @@ if __name__ == "__main__":
       pipeline, _ = session.create_telegram_simple_bot(
         node=node,
         name=PIPELINE_NAME,
+        instance_id="ratio1_telegram_bot_main",
         telegram_bot_token=telegram_bot_token,
         chat_id=chat_id,
         message_handler=reply,
