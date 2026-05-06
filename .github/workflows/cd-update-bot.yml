@@ -5,7 +5,9 @@ on:
     branches:
       - main
     paths:
+      - ratio1_tg_bot.py
       - ver.py
+      - .github/workflows/cd-update-bot.yml
 
 jobs:
   update-bot:
