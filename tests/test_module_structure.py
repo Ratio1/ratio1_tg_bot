@@ -1,10 +1,26 @@
 import ast
+import importlib
 from pathlib import Path
+import sys
+import types
 import unittest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BOT_FILE = REPO_ROOT / "ratio1_tg_bot.py"
+
+existing_ratio1 = sys.modules.get("ratio1")
+if existing_ratio1 is not None and not hasattr(existing_ratio1, "__path__"):
+  del sys.modules["ratio1"]
+
+try:
+  import ratio1  # noqa: F401
+except Exception:
+  ratio1_stub = types.ModuleType("ratio1")
+  ratio1_stub.Session = object
+  ratio1_stub.CustomPluginTemplate = object
+  sys.modules["ratio1"] = ratio1_stub
+bot = importlib.import_module("ratio1_tg_bot")
 
 
 class ModuleStructureTests(unittest.TestCase):
@@ -87,6 +103,20 @@ class ModuleStructureTests(unittest.TestCase):
 
     self.assertIn("urlparse", plugin_attrs)
     self.assertIn("urlunparse", plugin_attrs)
+
+  def test_ratio1_code_checker_accepts_remote_handlers_when_available(self):
+    try:
+      from ratio1.code_cheker.base import BaseCodeChecker
+    except Exception as exc:
+      self.skipTest(f"Ratio1 code checker is not available: {exc}")
+
+    checker = BaseCodeChecker()
+    for handler in [bot.reply, bot.loop_processing]:
+      source = checker.get_function_source_code(handler)
+      errors = checker.check_code_text(source)
+      self.assertIsNone(errors, f"{handler.__name__} is not Ratio1-serializable: {errors}")
+      b64code = checker.code_to_base64(source)
+      self.assertIsNotNone(b64code, f"{handler.__name__} did not serialize to base64")
 
 
 if __name__ == "__main__":

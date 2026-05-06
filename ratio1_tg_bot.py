@@ -46,8 +46,9 @@ def loop_processing(plugin: CustomPluginTemplate):
   def check_api_health(health_url: str):
     try:
       response = plugin.requests.get(health_url, timeout=10)
-      status_code = getattr(response, "status_code", None)
-      if status_code is None:
+      try:
+        status_code = response.status_code
+      except Exception:
         return False, "The API response did not include an HTTP status code."
       if 200 <= status_code < 400:
         return True, f"HTTP {status_code}"
@@ -436,8 +437,9 @@ def reply(plugin: CustomPluginTemplate, message: str, user: str, chat_id: str):
   def check_api_health(health_url: str):
     try:
       response = plugin.requests.get(health_url, timeout=10)
-      status_code = getattr(response, "status_code", None)
-      if status_code is None:
+      try:
+        status_code = response.status_code
+      except Exception:
         return False, "The API response did not include an HTTP status code."
       if 200 <= status_code < 400:
         return True, f"HTTP {status_code}"
