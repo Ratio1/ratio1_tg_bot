@@ -66,6 +66,7 @@ class FakeBC:
 
 
 class FakePlugin:
+  cfg_verbose_logging = False
   cfg_chat_id = "community-chat"
   cfg_version = "test"
   cfg_admins = []
@@ -274,6 +275,34 @@ class WatchApiCommandTests(unittest.TestCase):
       plugin.obj_cache["ratio1_watched_apis"]["https://api.example.com/health"]["subscribers"],
       [1],
     )
+
+
+class VerboseLoggingTests(unittest.TestCase):
+  def test_flag_controls_command_and_monitoring_logs_without_changing_alerts(self):
+    for enabled in (False, True):
+      with self.subTest(enabled=enabled):
+        plugin = FakePlugin(
+          requests=FakeRequests(status_codes=[200, 503]),
+          disk={"ratio1_epoch_review_data.pkl": {1: True}},
+        )
+        plugin.cfg_verbose_logging = enabled
+        logs = []
+        plugin.P = logs.append
+
+        bot.reply(plugin, "private message body", "u1", "1")
+        bot.reply(plugin, "/watch_api https://api.example.com/private-token", "u1", "1")
+        response = bot.reply(plugin, "yes", "u1", "1")
+        bot.loop_processing(plugin)
+
+        self.assertIn("You are now watching API", response)
+        self.assertEqual(len(plugin.sent_messages), 1)
+        self.assertIn("is offline", plugin.sent_messages[0][1])
+        self.assertEqual(bool(logs), enabled)
+        if enabled:
+          self.assertTrue(any("Handling /watch_api" in line for line in logs))
+          self.assertTrue(any("API status:" in line for line in logs))
+          self.assertTrue(all(line.startswith("[bot-debug]") for line in logs))
+        self.assertFalse(any("private message body" in line or "private-token" in line for line in logs))
 
 
 class ApiMonitoringLoopTests(unittest.TestCase):
